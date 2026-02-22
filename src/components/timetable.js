@@ -4,9 +4,10 @@ const DAYS = ['월', '화', '수', '목', '금', '토', '일'];
 const HOURS = Array.from({ length: 12 }, (_, i) => i + 10); // 10:00 ~ 21:00
 
 export function renderTimetable(container, match, role, onCellToggle) {
-    const timetable = match.timetable;
+  const seniorTable = match.senior_timetable || [];
+  const juniorTable = match.junior_timetable || [];
 
-    let html = `
+  let html = `
     <div class="timetable-container">
       <div class="timetable-legend">
         <div class="timetable-legend-item">
@@ -36,67 +37,66 @@ export function renderTimetable(container, match, role, onCellToggle) {
           <tbody>
   `;
 
-    for (let row = 0; row < 12; row++) {
-        const hour = HOURS[row];
-        html += '<tr>';
-        html += `<td class="time-label">${hour}:00</td>`;
+  for (let row = 0; row < 12; row++) {
+    const hour = HOURS[row];
+    html += '<tr>';
+    html += `<td class="time-label">${hour}:00</td>`;
 
-        for (let col = 0; col < 7; col++) {
-            const seniorSelected = timetable.senior[row][col];
-            const juniorSelected = timetable.junior[row][col];
+    for (let col = 0; col < 7; col++) {
+      const seniorSelected = seniorTable.some(cell => cell.row === row && cell.col === col);
+      const juniorSelected = juniorTable.some(cell => cell.row === row && cell.col === col);
 
-            let cellClass = 'cell-empty';
-            let cellContent = '';
+      let cellClass = 'cell-empty';
+      let cellContent = '';
 
-            if (seniorSelected && juniorSelected) {
-                cellClass = 'cell-overlap';
-                cellContent = '✓';
-            } else if (seniorSelected) {
-                cellClass = 'cell-senior';
-            } else if (juniorSelected) {
-                cellClass = 'cell-junior';
-            }
+      if (seniorSelected && juniorSelected) {
+        cellClass = 'cell-overlap';
+        cellContent = '✓';
+      } else if (seniorSelected) {
+        cellClass = 'cell-senior';
+      } else if (juniorSelected) {
+        cellClass = 'cell-junior';
+      }
 
-            html += `<td class="${cellClass}" data-row="${row}" data-col="${col}">${cellContent}</td>`;
-        }
-
-        html += '</tr>';
+      html += `<td class="${cellClass}" data-row="${row}" data-col="${col}">${cellContent}</td>`;
     }
 
-    html += `
+    html += '</tr>';
+  }
+
+  html += `
           </tbody>
         </table>
       </div>
     </div>
   `;
 
-    container.innerHTML = html;
+  container.innerHTML = html;
 
-    // Add click handlers
-    container.querySelectorAll('td[data-row]').forEach(cell => {
-        cell.addEventListener('click', () => {
-            const row = parseInt(cell.dataset.row);
-            const col = parseInt(cell.dataset.col);
-            if (onCellToggle) onCellToggle(row, col);
-        });
+  // Add click handlers
+  container.querySelectorAll('td[data-row]').forEach(cell => {
+    cell.addEventListener('click', () => {
+      const row = parseInt(cell.dataset.row);
+      const col = parseInt(cell.dataset.col);
+      if (onCellToggle) onCellToggle(row, col);
     });
+  });
 }
 
 export function getOverlappingSlots(match) {
-    const overlaps = [];
-    const timetable = match.timetable;
+  const overlaps = [];
+  const seniorTable = match.senior_timetable || [];
+  const juniorTable = match.junior_timetable || [];
 
-    for (let row = 0; row < 12; row++) {
-        for (let col = 0; col < 7; col++) {
-            if (timetable.senior[row][col] && timetable.junior[row][col]) {
-                overlaps.push({
-                    day: DAYS[col],
-                    hour: HOURS[row],
-                    label: `${DAYS[col]} ${HOURS[row]}:00`
-                });
-            }
-        }
+  seniorTable.forEach(s => {
+    if (juniorTable.some(j => j.row === s.row && j.col === s.col)) {
+      overlaps.push({
+        day: DAYS[s.col],
+        hour: HOURS[s.row],
+        label: `${DAYS[s.col]} ${HOURS[s.row]}:00`
+      });
     }
+  });
 
-    return overlaps;
+  return overlaps;
 }

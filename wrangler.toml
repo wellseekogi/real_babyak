@@ -1,0 +1,9 @@
+name = "knu-meal-meetup"
+compatibility_date = "2024-09-23"
+pages_build_output_dir = "dist"
+
+# D1 Database Binding
+[[d1_databases]]
+binding = "DB"
+database_name = "knu-meal-db"
+database_id = "7c26fc1f-659a-4c55-a4ab-296a3cb94ca3"

@@ -2,15 +2,15 @@
 import Store from '../store.js';
 import { showToast } from '../utils.js';
 
-export function renderJunior(app, navigateTo) {
-    const posts = Store.getAllPosts().filter(p => p.status === 'open');
-    const allRequests = Store.getAllRequests();
+export async function renderJunior(app, navigateTo) {
+  const user = Store.getCurrentUser();
+  const allPosts = await Store.getAllPosts();
+  const posts = allPosts.filter(p => p.status === 'open');
 
-    // Get junior's sent requests
-    const user = Store.getCurrentUser();
-    const myRequests = allRequests; // In local demo, show all requests
+  // Get junior's sent requests
+  const myRequests = user ? await Store.getRequestsByJunior(user.id) : [];
 
-    app.innerHTML = `
+  app.innerHTML = `
     <div class="page-enter">
       ${renderNavbar(navigateTo)}
       <div class="dashboard">
@@ -33,9 +33,9 @@ export function renderJunior(app, navigateTo) {
         <!-- Browse Tab -->
         <div id="tab-browse" class="tab-content">
           ${posts.length === 0
-            ? `<div class="empty-state"><div class="emoji">🍽️</div><p>아직 올라온 밥약 글이 없어요.</p></div>`
-            : `<div class="post-grid" id="post-grid">${posts.map(p => renderSeniorPostCard(p)).join('')}</div>`
-        }
+      ? `<div class="empty-state"><div class="emoji">🍽️</div><p>아직 올라온 밥약 글이 없어요.</p></div>`
+      : `<div class="post-grid" id="post-grid">${await Promise.all(posts.map(p => renderSeniorPostCard(p))).then(htmls => htmls.join(''))}</div>`
+    }
         </div>
 
         <!-- My Requests Tab -->
@@ -43,62 +43,64 @@ export function renderJunior(app, navigateTo) {
           <div class="section-header">
             <div class="section-title">내 신청 현황</div>
           </div>
-          ${renderMyRequests(myRequests, navigateTo)}
+          ${await renderMyRequests(myRequests, navigateTo)}
         </div>
       </div>
     </div>
   `;
 
-    // Tab switching
-    document.querySelectorAll('.tab-btn').forEach(btn => {
-        btn.addEventListener('click', () => {
-            document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
-            btn.classList.add('active');
-            document.querySelectorAll('.tab-content').forEach(c => c.classList.add('hidden'));
-            document.getElementById(`tab-${btn.dataset.tab}`).classList.remove('hidden');
-        });
+  // Tab switching
+  document.querySelectorAll('.tab-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      document.querySelectorAll('.tab-content').forEach(c => c.classList.add('hidden'));
+      document.getElementById(`tab-${btn.dataset.tab}`).classList.remove('hidden');
     });
+  });
 
-    // Search
-    const searchInput = document.getElementById('search-input');
-    searchInput?.addEventListener('input', () => {
-        const query = searchInput.value.toLowerCase().trim();
-        const cards = document.querySelectorAll('#post-grid .post-card');
-        cards.forEach(card => {
-            const text = card.textContent.toLowerCase();
-            card.style.display = text.includes(query) ? '' : 'none';
-        });
+  // Search
+  const searchInput = document.getElementById('search-input');
+  searchInput?.addEventListener('input', () => {
+    const query = searchInput.value.toLowerCase().trim();
+    const cards = document.querySelectorAll('#post-grid .post-card');
+    cards.forEach(card => {
+      const text = card.textContent.toLowerCase();
+      card.style.display = text.includes(query) ? '' : 'none';
     });
+  });
 
-    // Post card click → open request modal
-    document.querySelectorAll('.post-card[data-post-id]').forEach(card => {
-        card.addEventListener('click', () => {
-            const postId = card.dataset.postId;
-            const post = Store.getPost(postId);
-            if (post) showRequestModal(post, app, navigateTo);
-        });
+  // Post card click → open request modal
+  document.querySelectorAll('.post-card[data-post-id]').forEach(card => {
+    card.addEventListener('click', async () => {
+      const postId = card.dataset.postId;
+      // Since we already have the post object in 'posts', we could use it directly
+      // But to be safe and consistent with Store pattern:
+      const post = await Store.getPost(postId) || posts.find(p => p.id === postId);
+      if (post) showRequestModal(post, app, navigateTo);
     });
+  });
 
-    // Match card link
-    document.querySelectorAll('.match-card-link').forEach(card => {
-        card.addEventListener('click', () => {
-            navigateTo(`match/${card.dataset.matchId}`);
-        });
+  // Match card link
+  document.querySelectorAll('.match-card-link').forEach(card => {
+    card.addEventListener('click', () => {
+      navigateTo(`match/${card.dataset.matchId}`);
     });
+  });
 
-    // Logout
-    document.getElementById('btn-logout')?.addEventListener('click', () => {
-        Store.clearCurrentUser();
-        navigateTo('');
-    });
-    document.getElementById('nav-home')?.addEventListener('click', () => {
-        Store.clearCurrentUser();
-        navigateTo('');
-    });
+  // Logout
+  document.getElementById('btn-logout')?.addEventListener('click', () => {
+    Store.clearCurrentUser();
+    navigateTo('');
+  });
+  document.getElementById('nav-home')?.addEventListener('click', () => {
+    Store.clearCurrentUser();
+    navigateTo('');
+  });
 }
 
 function renderNavbar(navigateTo) {
-    return `
+  return `
     <nav class="navbar">
       <div class="navbar-brand" id="nav-home">
         <span class="emoji">🍚</span>
@@ -112,13 +114,13 @@ function renderNavbar(navigateTo) {
   `;
 }
 
-function renderSeniorPostCard(post) {
-    const senior = Store.getSenior(post.seniorId);
-    if (!senior) return '';
+async function renderSeniorPostCard(post) {
+  const senior = await Store.getSenior(post.senior_id);
+  if (!senior) return '';
 
-    const date = new Date(post.createdAt).toLocaleDateString('ko-KR');
+  const date = new Date(post.created_at).toLocaleDateString('ko-KR');
 
-    return `
+  return `
     <div class="post-card" data-post-id="${post.id}">
       <div class="post-card-header">
         <div class="post-avatar">${senior.emoji || '🎓'}</div>
@@ -130,7 +132,7 @@ function renderSeniorPostCard(post) {
       <div class="post-title">${post.title}</div>
       <div class="post-desc">${post.description}</div>
       <div class="post-tags">
-        ${(post.tags || []).map(t => `<span class="badge badge-tag">#${t}</span>`).join('')}
+        ${(Array.isArray(post.tags) ? post.tags : []).map(t => `<span class="badge badge-tag">#${t}</span>`).join('')}
       </div>
       <div class="post-meta">
         <span>${date}</span>
@@ -140,30 +142,31 @@ function renderSeniorPostCard(post) {
   `;
 }
 
-function renderMyRequests(requests, navigateTo) {
-    if (requests.length === 0) {
-        return `<div class="empty-state"><div class="emoji">📋</div><p>아직 신청한 밥약이 없어요.</p></div>`;
+async function renderMyRequests(requests, navigateTo) {
+  if (requests.length === 0) {
+    return `<div class="empty-state"><div class="emoji">📋</div><p>아직 신청한 밥약이 없어요.</p></div>`;
+  }
+
+  const requestCards = await Promise.all(requests.map(async req => {
+    const post = await Store.getPost(req.postId);
+    const senior = post ? await Store.getSenior(post.senior_id) : { emoji: '🎓', name: '선배', department: '정보 없음' };
+
+    const statusMap = {
+      pending: '<span class="badge badge-pending">⏳ 대기중</span>',
+      accepted: '<span class="badge badge-accepted">✅ 수락됨</span>',
+      rejected: '<span class="badge badge-rejected">❌ 거절됨</span>',
+    };
+
+    // Check if there's a match for accepted requests
+    let matchLink = '';
+    if (req.status === 'accepted') {
+      const matches = await Store.getMatchesByRequest(req.id);
+      if (matches.length > 0) {
+        matchLink = `<div class="match-card-link mt-2" data-match-id="${matches[0].id}" style="cursor:pointer;color:var(--accent);font-weight:600;font-size:0.88rem">🤝 시간·장소 조율하기 →</div>`;
+      }
     }
 
-    return requests.map(req => {
-        const post = Store.getPost(req.postId);
-        const senior = post ? Store.getSenior(post.seniorId) : null;
-        const statusMap = {
-            pending: '<span class="badge badge-pending">⏳ 대기중</span>',
-            accepted: '<span class="badge badge-accepted">✅ 수락됨</span>',
-            rejected: '<span class="badge badge-rejected">❌ 거절됨</span>',
-        };
-
-        // Check if there's a match for accepted requests
-        let matchLink = '';
-        if (req.status === 'accepted') {
-            const matches = Store.getMatchesByRequest(req.id);
-            if (matches.length > 0) {
-                matchLink = `<div class="match-card-link mt-2" data-match-id="${matches[0].id}" style="cursor:pointer;color:var(--accent);font-weight:600;font-size:0.88rem">🤝 시간·장소 조율하기 →</div>`;
-            }
-        }
-
-        return `
+    return `
       <div class="request-card">
         <div class="request-header">
           <div class="request-anon">
@@ -177,21 +180,26 @@ function renderMyRequests(requests, navigateTo) {
         </div>
         <div class="request-connection">
           <strong style="color:var(--text);display:block;margin-bottom:4px">💬 내가 적은 접점</strong>
-          ${req.connectionNote}
+          ${req.connection_note || req.connectionNote || '정보 없음'}
         </div>
         ${matchLink}
       </div>
     `;
-    }).join('');
+  }));
+
+  return requestCards.join('');
 }
 
-function showRequestModal(post, app, navigateTo) {
-    const senior = Store.getSenior(post.seniorId);
-    if (!senior) return;
+async function showRequestModal(post, app, navigateTo) {
+  const senior = await Store.getSenior(post.senior_id);
+  if (!senior) {
+    showToast('선배 정보를 불러올 수 없습니다.', 'error');
+    return;
+  }
 
-    const overlay = document.createElement('div');
-    overlay.className = 'modal-overlay';
-    overlay.innerHTML = `
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  overlay.innerHTML = `
     <div class="modal">
       <div class="modal-header">
         <div class="modal-title">🙋 밥약 신청</div>
@@ -225,30 +233,30 @@ function showRequestModal(post, app, navigateTo) {
       </div>
     </div>
   `;
-    document.body.appendChild(overlay);
+  document.body.appendChild(overlay);
 
-    overlay.querySelector('#modal-close').addEventListener('click', () => overlay.remove());
-    overlay.querySelector('#modal-cancel').addEventListener('click', () => overlay.remove());
-    overlay.addEventListener('click', (e) => {
-        if (e.target === overlay) overlay.remove();
+  overlay.querySelector('#modal-close').addEventListener('click', () => overlay.remove());
+  overlay.querySelector('#modal-cancel').addEventListener('click', () => overlay.remove());
+  overlay.addEventListener('click', (e) => {
+    if (e.target === overlay) overlay.remove();
+  });
+
+  overlay.querySelector('#modal-submit').addEventListener('click', () => {
+    const connectionNote = overlay.querySelector('#connection-note').value.trim();
+
+    if (!connectionNote) {
+      showToast('접점을 적어주세요!', 'error');
+      return;
+    }
+
+    Store.createRequest({
+      postId: post.id,
+      juniorAlias: '익명 후배',
+      connectionNote,
     });
 
-    overlay.querySelector('#modal-submit').addEventListener('click', () => {
-        const connectionNote = overlay.querySelector('#connection-note').value.trim();
-
-        if (!connectionNote) {
-            showToast('접점을 적어주세요!', 'error');
-            return;
-        }
-
-        Store.createRequest({
-            postId: post.id,
-            juniorAlias: '익명 후배',
-            connectionNote,
-        });
-
-        overlay.remove();
-        showToast('밥약 신청이 완료되었어요! 🎉');
-        renderJunior(app, navigateTo);
-    });
+    overlay.remove();
+    showToast('밥약 신청이 완료되었어요! 🎉');
+    renderJunior(app, navigateTo);
+  });
 }

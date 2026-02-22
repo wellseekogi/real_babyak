@@ -20,23 +20,26 @@ const SEARCH_RADIUS = 600; // meters
 let mapInstance = null;
 let markers = [];
 
-export function renderMap(container, onRestaurantSelect) {
+export function renderMap(container, onLocationSelect, match, role) {
     container.innerHTML = `
     <div class="map-container">
       <div class="section-header">
-        <div class="section-title">📍 장소 조율</div>
+        <div class="section-title">📍 장소 정하기</div>
       </div>
-      <div style="font-size:0.85rem;color:var(--text-secondary);margin-bottom:10px">
-        경북대 대학로 근처 식당을 검색합니다. 마커를 클릭하여 장소를 제안하세요.
+      <div style="font-size:0.85rem;color:var(--text-secondary);margin-bottom:14px;line-height:1.4">
+        지도를 클릭하여 내가 원하는 약속 장소를 제안하세요.<br/>
+        <span style="color:#2ecc71;font-weight:700">● 선배 제안</span> &nbsp; <span style="color:#3498db;font-weight:700">● 후배 제안</span>
       </div>
-      <div style="display:flex;gap:10px;margin-bottom:14px;flex-wrap:wrap">
-        <button class="btn btn-primary btn-sm" id="btn-search-restaurants">🔍 주변 식당 검색</button>
-        <span id="search-status" style="font-size:0.82rem;color:var(--text-muted);display:flex;align-items:center"></span>
-      </div>
-      <div class="map-wrap" id="map"></div>
-      <div class="restaurant-list" id="restaurant-list"></div>
+      <div class="map-wrap" id="map" style="height:350px;border-radius:12px"></div>
     </div>
   `;
+
+    let seniorMarker = null;
+    let juniorMarker = null;
+    let tempMarker = null;
+
+    const seniorLoc = match.senior_location;
+    const juniorLoc = match.junior_location;
 
     // Initialize map
     setTimeout(() => {
@@ -46,7 +49,7 @@ export function renderMap(container, onRestaurantSelect) {
         }
 
         mapInstance = L.map('map', {
-            center: KNU_CENTER,
+            center: seniorLoc ? [seniorLoc.lat, seniorLoc.lon] : (juniorLoc ? [juniorLoc.lat, juniorLoc.lon] : KNU_CENTER),
             zoom: 16,
             zoomControl: true,
         });
@@ -56,216 +59,72 @@ export function renderMap(container, onRestaurantSelect) {
             maxZoom: 19,
         }).addTo(mapInstance);
 
-        // Add KNU marker
-        const knuMarker = L.marker(KNU_CENTER, {
+        // KNU
+        L.marker(KNU_CENTER, {
             icon: L.divIcon({
                 className: '',
                 html: '<div style="font-size:24px;text-align:center">🏫</div>',
                 iconSize: [30, 30],
                 iconAnchor: [15, 15],
             })
-        }).addTo(mapInstance);
-        knuMarker.bindPopup('<strong>경북대학교</strong>');
+        }).addTo(mapInstance).bindPopup('<strong>경북대학교</strong>');
 
-        // Add search radius circle
-        L.circle(KNU_CENTER, {
-            radius: SEARCH_RADIUS,
-            color: 'rgba(26, 107, 60, 0.5)',
-            fillColor: 'rgba(26, 107, 60, 0.08)',
-            fillOpacity: 0.3,
-            weight: 1,
-        }).addTo(mapInstance);
-    }, 100);
-
-    // Search button
-    document.getElementById('btn-search-restaurants')?.addEventListener('click', () => {
-        searchRestaurants(onRestaurantSelect);
-    });
-}
-
-async function searchRestaurants(onRestaurantSelect) {
-    const statusEl = document.getElementById('search-status');
-    const listEl = document.getElementById('restaurant-list');
-
-    if (statusEl) statusEl.textContent = '검색중...';
-
-    // Overpass API query for restaurants near KNU Daehak-ro
-    const query = `
-    [out:json][timeout:10];
-    (
-      node["amenity"="restaurant"](around:${SEARCH_RADIUS},${KNU_CENTER[0]},${KNU_CENTER[1]});
-      node["amenity"="cafe"](around:${SEARCH_RADIUS},${KNU_CENTER[0]},${KNU_CENTER[1]});
-      node["amenity"="fast_food"](around:${SEARCH_RADIUS},${KNU_CENTER[0]},${KNU_CENTER[1]});
-      node["cuisine"](around:${SEARCH_RADIUS},${KNU_CENTER[0]},${KNU_CENTER[1]});
-    );
-    out body;
-  `;
-
-    try {
-        const response = await fetch('https://overpass-api.de/api/interpreter', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-            body: `data=${encodeURIComponent(query)}`,
-        });
-
-        const data = await response.json();
-
-        // Clear old markers
-        markers.forEach(m => mapInstance.removeLayer(m));
-        markers = [];
-
-        const restaurants = data.elements
-            .filter(el => el.tags && (el.tags.name || el.tags['name:ko']))
-            .map(el => ({
-                id: el.id,
-                name: el.tags['name:ko'] || el.tags.name,
-                address: el.tags['addr:full'] || el.tags['addr:street'] || el.tags['addr:city'] || '주소 미제공',
-                cuisine: el.tags.cuisine || '',
-                lat: el.lat,
-                lon: el.lon,
-            }));
-
-        // Deduplicate by name
-        const seen = new Set();
-        const unique = restaurants.filter(r => {
-            if (seen.has(r.name)) return false;
-            seen.add(r.name);
-            return true;
-        });
-
-        if (statusEl) statusEl.textContent = `${unique.length}개 식당 발견`;
-
-        // Add markers
-        unique.forEach(r => {
-            const marker = L.marker([r.lat, r.lon]).addTo(mapInstance);
-            marker.bindPopup(`
-        <div class="popup-name">${r.name}</div>
-        <div class="popup-addr">${r.address}${r.cuisine ? ` · ${r.cuisine}` : ''}</div>
-        <button class="btn btn-accent btn-sm" onclick="window.__selectRestaurant('${r.id}')">이 장소 선택</button>
-      `);
-            markers.push(marker);
-        });
-
-        // Build list
-        if (listEl) {
-            listEl.innerHTML = unique.length === 0
-                ? '<div style="text-align:center;color:var(--text-muted);padding:20px">검색 결과가 없습니다. 다시 시도해주세요.</div>'
-                : unique.map(r => `
-          <div class="restaurant-item" data-restaurant-id="${r.id}" data-name="${r.name}" data-addr="${r.address}" data-lat="${r.lat}" data-lon="${r.lon}">
-            <div>
-              <div class="restaurant-name">🍽️ ${r.name}</div>
-              <div class="restaurant-addr">${r.address}${r.cuisine ? ` · ${r.cuisine}` : ''}</div>
-            </div>
-            <button class="btn btn-accent btn-sm btn-select-restaurant">선택</button>
-          </div>
-        `).join('');
-
-            // Click handlers for list
-            listEl.querySelectorAll('.btn-select-restaurant').forEach(btn => {
-                btn.addEventListener('click', (e) => {
-                    e.stopPropagation();
-                    const item = btn.closest('.restaurant-item');
-                    const restaurant = {
-                        id: item.dataset.restaurantId,
-                        name: item.dataset.name,
-                        address: item.dataset.addr,
-                        lat: parseFloat(item.dataset.lat),
-                        lon: parseFloat(item.dataset.lon),
-                    };
-
-                    // Highlight selected
-                    listEl.querySelectorAll('.restaurant-item').forEach(i => i.classList.remove('selected'));
-                    item.classList.add('selected');
-
-                    if (onRestaurantSelect) onRestaurantSelect(restaurant);
-                });
-            });
+        // Render existing pins
+        if (seniorLoc) {
+            seniorMarker = L.marker([seniorLoc.lat, seniorLoc.lon], {
+                icon: L.divIcon({
+                    className: '',
+                    html: '<div style="font-size:32px;text-align:center">🟢</div>',
+                    iconSize: [32, 32],
+                    iconAnchor: [16, 16],
+                })
+            }).addTo(mapInstance).bindPopup('<strong>선배님 제안 장소</strong>');
         }
 
-        // Global function for popup button
-        window.__selectRestaurant = (id) => {
-            const r = unique.find(r => String(r.id) === String(id));
-            if (r && onRestaurantSelect) {
-                onRestaurantSelect(r);
-                // Highlight in list
-                if (listEl) {
-                    listEl.querySelectorAll('.restaurant-item').forEach(i => i.classList.remove('selected'));
-                    const item = listEl.querySelector(`[data-restaurant-id="${id}"]`);
-                    if (item) item.classList.add('selected');
-                }
-            }
-        };
-    } catch (err) {
-        console.error('Overpass API error:', err);
-        if (statusEl) statusEl.textContent = '검색 실패. 다시 시도해주세요.';
+        if (juniorLoc) {
+            juniorMarker = L.marker([juniorLoc.lat, juniorLoc.lon], {
+                icon: L.divIcon({
+                    className: '',
+                    html: '<div style="font-size:32px;text-align:center">🔵</div>',
+                    iconSize: [32, 32],
+                    iconAnchor: [16, 16],
+                })
+            }).addTo(mapInstance).bindPopup('<strong>후배님 제안 장소</strong>');
+        }
 
-        // Fallback: show hardcoded restaurants near KNU
-        showFallbackRestaurants(listEl, onRestaurantSelect);
-    }
-}
+        // Click to drop TEMP pin
+        if (match.status !== 'confirmed') {
+            mapInstance.on('click', (e) => {
+                const { lat, lng } = e.latlng;
 
-function showFallbackRestaurants(listEl, onRestaurantSelect) {
-    const fallback = [
-        { id: 'f1', name: '대학로 김밥천국', address: '대구 북구 대학로 80길', lat: 35.8892, lon: 128.6115 },
-        { id: 'f2', name: '경대 돈까스', address: '대구 북구 대학로 78길', lat: 35.8880, lon: 128.6108 },
-        { id: 'f3', name: '한우마을', address: '대구 북구 산격동 대학로', lat: 35.8895, lon: 128.6098 },
-        { id: 'f4', name: '경대 순대국밥', address: '대구 북구 대학로 82길', lat: 35.8878, lon: 128.6120 },
-        { id: 'f5', name: '대학로 파스타', address: '대구 북구 대학로 76길', lat: 35.8884, lon: 128.6095 },
-    ];
+                if (tempMarker) mapInstance.removeLayer(tempMarker);
 
-    // Add markers
-    fallback.forEach(r => {
-        const marker = L.marker([r.lat, r.lon]).addTo(mapInstance);
-        marker.bindPopup(`
-      <div class="popup-name">${r.name}</div>
-      <div class="popup-addr">${r.address}</div>
-      <button class="btn btn-accent btn-sm" onclick="window.__selectRestaurant('${r.id}')">이 장소 선택</button>
-    `);
-        markers.push(marker);
-    });
+                tempMarker = L.marker([lat, lng]).addTo(mapInstance);
 
-    if (listEl) {
-        listEl.innerHTML = `
-      <div style="font-size:0.82rem;color:var(--status-pending);margin-bottom:10px;padding:8px 12px;background:rgba(232,168,56,0.1);border-radius:6px">
-        ⚠️ API 연결 실패. 기본 식당 목록을 표시합니다.
-      </div>
-    ` + fallback.map(r => `
-      <div class="restaurant-item" data-restaurant-id="${r.id}" data-name="${r.name}" data-addr="${r.address}" data-lat="${r.lat}" data-lon="${r.lon}">
-        <div>
-          <div class="restaurant-name">🍽️ ${r.name}</div>
-          <div class="restaurant-addr">${r.address}</div>
-        </div>
-        <button class="btn btn-accent btn-sm btn-select-restaurant">선택</button>
-      </div>
-    `).join('');
+                const popupContent = document.createElement('div');
+                popupContent.style.padding = '5px';
+                popupContent.innerHTML = `
+                    <div style="font-weight:600;margin-bottom:8px;font-size:0.9rem">이 장소를 제안할까요?</div>
+                    <button class="btn btn-accent btn-sm" id="btn-suggest-this-spot" style="width:100%">📌 ${role === 'senior' ? '선배 장소로 제안' : '후배 장소로 제안'}</button>
+                `;
 
-        listEl.querySelectorAll('.btn-select-restaurant').forEach(btn => {
-            btn.addEventListener('click', (e) => {
-                e.stopPropagation();
-                const item = btn.closest('.restaurant-item');
-                const restaurant = {
-                    id: item.dataset.restaurantId,
-                    name: item.dataset.name,
-                    address: item.dataset.addr,
-                    lat: parseFloat(item.dataset.lat),
-                    lon: parseFloat(item.dataset.lon),
-                };
-                listEl.querySelectorAll('.restaurant-item').forEach(i => i.classList.remove('selected'));
-                item.classList.add('selected');
-                if (onRestaurantSelect) onRestaurantSelect(restaurant);
+                tempMarker.bindPopup(popupContent).openPopup();
+
+                setTimeout(() => {
+                    document.getElementById('btn-suggest-this-spot')?.addEventListener('click', () => {
+                        const location = {
+                            id: `custom-${role}-${Date.now()}`,
+                            name: `${role === 'senior' ? '선배' : '후배'} 제안 장소`,
+                            address: `위도: ${lat.toFixed(4)}, 경도: ${lng.toFixed(4)}`,
+                            lat,
+                            lon: lng
+                        };
+                        if (onLocationSelect) onLocationSelect(location);
+                    });
+                }, 10);
             });
-        });
-
-        window.__selectRestaurant = (id) => {
-            const r = fallback.find(r => r.id === id);
-            if (r && onRestaurantSelect) {
-                onRestaurantSelect(r);
-                listEl.querySelectorAll('.restaurant-item').forEach(i => i.classList.remove('selected'));
-                const item = listEl.querySelector(`[data-restaurant-id="${id}"]`);
-                if (item) item.classList.add('selected');
-            }
-        };
-    }
+        }
+    }, 100);
 }
 
 export function destroyMap() {

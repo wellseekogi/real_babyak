@@ -4,8 +4,8 @@ import { showToast } from '../utils.js';
 import { renderTimetable, getOverlappingSlots } from '../components/timetable.js';
 import { renderMap, destroyMap } from '../components/map.js';
 
-export function renderMatch(app, navigateTo, matchId) {
-  const match = Store.getMatch(matchId);
+export async function renderMatch(app, navigateTo, matchId) {
+  const match = await Store.getMatch(matchId);
   if (!match) {
     showToast('매칭 정보를 찾을 수 없습니다.', 'error');
     navigateTo('');
@@ -14,9 +14,10 @@ export function renderMatch(app, navigateTo, matchId) {
 
   const user = Store.getCurrentUser();
   const role = user?.role || 'senior';
-  const post = Store.getPost(match.postId);
-  const senior = post ? Store.getSenior(post.seniorId) : null;
-  const request = Store.getRequest(match.requestId);
+  const post = await Store.getPost(match.postId);
+  const senior = post ? await Store.getSenior(post.seniorId) : { emoji: '🎓', name: '선배', department: '정보 없음' };
+
+  const request = await Store.getRequest(match.requestId);
 
   const overlaps = getOverlappingSlots(match);
 
@@ -59,37 +60,66 @@ export function renderMatch(app, navigateTo, matchId) {
         </div>
 
         <!-- Status Summary -->
-        ${match.status === 'confirmed' ? renderConfirmedSummary(match, overlaps) : ''}
+        ${match.status === 'confirmed' ? renderConfirmedSummary(match) : ''}
 
         <!-- Overlapping times -->
-        ${overlaps.length > 0 ? `
+        ${match.status !== 'confirmed' ? `
           <div class="card" style="margin-bottom:24px;border-color:rgba(231,76,60,0.3)">
-            <div style="font-weight:700;margin-bottom:8px">🔥 겹치는 시간 (${overlaps.length}개)</div>
-            <div style="display:flex;flex-wrap:wrap;gap:8px">
-              ${overlaps.map(o => `<span class="badge" style="background:rgba(231,76,60,0.15);color:var(--overlap-color)">${o.label}</span>`).join('')}
-            </div>
+            <div style="font-weight:700;margin-bottom:12px">✨ 겹치는 시간 (하나를 선택하세요)</div>
+            ${overlaps.length === 0
+        ? '<div style="font-size:0.85rem;color:var(--text-muted)">아직 겹치는 시간이 없어요. 시간표를 클릭해 보세요!</div>'
+        : `<div class="time-selector-list" style="display:grid;gap:8px">
+                  ${overlaps.map(o => `
+                    <label class="time-selector-item ${match.confirmed_time?.label === o.label ? 'selected' : ''}" style="display:flex;align-items:center;gap:10px;padding:12px;border:1px solid var(--border);border-radius:8px;cursor:pointer">
+                      <input type="radio" name="confirmed-time" value="${o.label}" ${match.confirmed_time?.label === o.label ? 'checked' : ''}>
+                      <span style="font-size:0.9rem">${o.label}</span>
+                    </label>
+                  `).join('')}
+                </div>`
+      }
           </div>
         ` : ''}
 
-        <!-- Selected Restaurant -->
-        ${match.selectedRestaurant ? `
-          <div class="card" style="margin-bottom:24px;border-color:rgba(212,168,67,0.3)">
-            <div style="font-weight:700;margin-bottom:6px">📍 선택된 장소</div>
-            <div style="font-size:1.05rem;font-weight:600">${match.selectedRestaurant.name}</div>
-            <div style="font-size:0.85rem;color:var(--text-secondary)">${match.selectedRestaurant.address}</div>
+        <!-- Suggested Locations -->
+        <div class="card" style="margin-bottom:24px">
+          <div style="font-weight:700;margin-bottom:12px">📍 최종 장소 결정</div>
+          <p style="font-size:0.82rem;color:var(--text-secondary);margin-bottom:12px">선배님과 후배님의 제안 중 하나를 전용 버튼으로 선택해주세요.</p>
+          <div class="location-selection-group">
+            <label class="location-select-item ${match.confirmed_location?.id === match.senior_location?.id && match.senior_location ? 'selected' : ''}">
+              <div style="display:flex;align-items:center;gap:12px;width:100%">
+                <input type="radio" name="confirmed-location" value="senior" ${match.confirmed_location?.id === match.senior_location?.id && match.senior_location ? 'checked' : ''} ${!match.senior_location || match.status === 'confirmed' ? 'disabled' : ''}>
+                <div style="flex:1">
+                  <div style="font-size:0.75rem;color:#2ecc71;font-weight:700">🟢 선배님 제안</div>
+                  <div style="font-size:0.9rem;font-weight:600">${match.senior_location?.address || '제안 대기 중'}</div>
+                </div>
+              </div>
+            </label>
+            <label class="location-select-item ${match.confirmed_location?.id === match.junior_location?.id && match.junior_location ? 'selected' : ''}">
+              <div style="display:flex;align-items:center;gap:12px;width:100%">
+                <input type="radio" name="confirmed-location" value="junior" ${match.confirmed_location?.id === match.junior_location?.id && match.junior_location ? 'checked' : ''} ${!match.junior_location || match.status === 'confirmed' ? 'disabled' : ''}>
+                <div style="flex:1">
+                  <div style="font-size:0.75rem;color:#3498db;font-weight:700">🔵 후배님 제안</div>
+                  <div style="font-size:0.9rem;font-weight:600">${match.junior_location?.address || '제안 대기 중'}</div>
+                </div>
+              </div>
+            </label>
           </div>
-        ` : ''}
+        </div>
 
-        <!-- Confirm button -->
-        ${match.status !== 'confirmed' && overlaps.length > 0 && match.selectedRestaurant ? `
+        <!-- Confirm button (Senior Only) -->
+        ${match.status !== 'confirmed' ? `
           <div style="text-align:center;margin-bottom:32px">
-            <button class="btn btn-accent btn-lg" id="btn-confirm-match">🎉 밥약 확정하기</button>
+            ${role === 'senior'
+        ? `<button class="btn btn-accent btn-lg" id="btn-confirm-match" ${(!match.confirmed_time || !match.confirmed_location) ? 'disabled' : ''}>🎉 이 시간·장소로 확정하기</button>
+                 <p style="font-size:0.82rem;color:var(--text-muted);margin-top:8px">시간과 장소를 모두 선택해야 확정할 수 있습니다.</p>`
+        : `<div class="badge badge-pending" style="padding:12px 20px">⏳ 선배님이 확정하기를 기다리고 있습니다.</div>`
+      }
           </div>
         ` : ''}
 
         <!-- Timetable Section -->
         <div class="section-header">
-          <div class="section-title">📅 시간 조율</div>
+          <div class="section-title">📅 시간 표시</div>
           <div style="font-size:0.82rem;color:var(--text-secondary)">
             ${role === 'senior' ? '🟢 선배 모드' : '🔵 후배 모드'}
           </div>
@@ -115,43 +145,99 @@ export function renderMatch(app, navigateTo, matchId) {
     navigateTo(role);
   });
 
-  document.getElementById('btn-logout')?.addEventListener('click', () => {
+  document.getElementById('btn-logout')?.addEventListener('click', async () => {
     destroyMap();
-    Store.clearCurrentUser();
+    await Store.clearCurrentUser();
     navigateTo('');
   });
 
-  document.getElementById('nav-home')?.addEventListener('click', () => {
+  document.getElementById('nav-home')?.addEventListener('click', async () => {
     destroyMap();
-    Store.clearCurrentUser();
     navigateTo('');
   });
 
-  document.getElementById('btn-confirm-match')?.addEventListener('click', () => {
-    Store.confirmMatch(matchId);
-    showToast('밥약이 확정되었습니다! 🎉🍚');
-    renderMatch(app, navigateTo, matchId);
+  // Time selection (Radio change)
+  document.querySelectorAll('input[name="confirmed-time"]').forEach(input => {
+    input.addEventListener('change', async (e) => {
+      const selectedLabel = e.target.value;
+      const selectedSlot = overlaps.find(o => o.label === selectedLabel);
+      if (selectedSlot) {
+        try {
+          await Store.updateMatch(matchId, { confirmed_time: selectedSlot });
+          destroyMap();
+          renderMatch(app, navigateTo, matchId);
+        } catch (err) {
+          showToast('시간 선택 실패: ' + err.message, 'error');
+        }
+      }
+    });
+  });
+
+  // Location selection (Radio change)
+  document.querySelectorAll('input[name="confirmed-location"]').forEach(input => {
+    input.addEventListener('change', async (e) => {
+      const type = e.target.value;
+      const loc = type === 'senior' ? match.senior_location : match.junior_location;
+      if (loc) {
+        try {
+          await Store.updateMatch(matchId, { confirmed_location: loc });
+          destroyMap();
+          renderMatch(app, navigateTo, matchId);
+        } catch (err) {
+          showToast('장소 선택 실패: ' + err.message, 'error');
+        }
+      }
+    });
+  });
+
+  document.getElementById('btn-confirm-match')?.addEventListener('click', async () => {
+    if (role !== 'senior') return;
+    try {
+      if (confirm('이 시간과 장소로 밥약을 확정하시겠어요?')) {
+        await Store.confirmMatch(matchId);
+        await Store.updatePost(match.postId, { status: 'closed' });
+        showToast('밥약이 확정되었습니다! 🎉');
+        destroyMap();
+        renderMatch(app, navigateTo, matchId);
+      }
+    } catch (e) {
+      showToast('확정 실패: ' + e.message, 'error');
+    }
   });
 
   // Render timetable
   const timetableRoot = document.getElementById('timetable-root');
-  function handleCellToggle(row, col) {
-    Store.toggleTimetableCell(matchId, role, row, col);
-    // Re-render the full page to update overlap display + timetable
-    destroyMap();
-    renderMatch(app, navigateTo, matchId);
+  async function handleCellToggle(row, col) {
+    const key = role === 'senior' ? 'senior_timetable' : 'junior_timetable';
+    const currentTable = match[key] || [];
+    const exists = currentTable.find(cell => cell.row === row && cell.col === col);
+    let newTable = exists
+      ? currentTable.filter(cell => !(cell.row === row && cell.col === col))
+      : [...currentTable, { row, col }];
+
+    try {
+      await Store.updateMatch(matchId, { [key]: newTable });
+      destroyMap();
+      renderMatch(app, navigateTo, matchId);
+    } catch (e) {
+      showToast('시간 업데이트 실패: ' + e.message, 'error');
+    }
   }
   renderTimetable(timetableRoot, match, role, handleCellToggle);
 
   // Render map
   const mapRoot = document.getElementById('map-root');
-  renderMap(mapRoot, (restaurant) => {
-    Store.selectRestaurant(matchId, restaurant);
-    showToast(`📍 ${restaurant.name} 선택됨!`);
-    // Re-render to show selected restaurant card
-    destroyMap();
-    renderMatch(app, navigateTo, matchId);
-  });
+  renderMap(mapRoot, async (location) => {
+    const locKey = role === 'senior' ? 'senior_location' : 'junior_location';
+    try {
+      await Store.updateMatch(matchId, { [locKey]: location });
+      showToast(`📍 내 제안 장소가 업데이트되었습니다.`);
+      destroyMap();
+      renderMatch(app, navigateTo, matchId);
+    } catch (e) {
+      showToast('장소 업데이트 실패: ' + e.message, 'error');
+    }
+  }, match, role);
 }
 
 function renderMatchNavbar(role, senior, navigateTo) {
@@ -171,14 +257,20 @@ function renderMatchNavbar(role, senior, navigateTo) {
   `;
 }
 
-function renderConfirmedSummary(match, overlaps) {
+function renderConfirmedSummary(match) {
   return `
     <div class="card" style="margin-bottom:24px;border-color:rgba(46,204,113,0.4);background:rgba(46,204,113,0.05)">
-      <div style="text-align:center">
+      <div style="text-align:center;padding:10px 0">
         <div style="font-size:2.5rem;margin-bottom:8px">🎉</div>
-        <div style="font-size:1.2rem;font-weight:800;color:var(--status-accepted);margin-bottom:8px">밥약이 확정되었습니다!</div>
-        ${match.selectedRestaurant ? `<div style="font-size:0.95rem">📍 <strong>${match.selectedRestaurant.name}</strong></div>` : ''}
-        ${overlaps.length > 0 ? `<div style="font-size:0.9rem;color:var(--text-secondary);margin-top:4px">⏰ ${overlaps.map(o => o.label).join(', ')}</div>` : ''}
+        <div style="font-size:1.2rem;font-weight:800;color:#2ecc71;margin-bottom:12px">밥약이 확정되었습니다!</div>
+        <div style="background:white;padding:16px;border-radius:12px;border:1px solid #2ecc71;display:inline-block;width:100%;max-width:300px">
+          <div style="font-size:1rem;font-weight:700;margin-bottom:8px;color:var(--text)">⏰ ${match.confirmed_time?.label || '시간 정보 없음'}</div>
+          <div style="font-size:0.85rem;color:var(--text-secondary);text-align:left;line-height:1.6">
+            📍 <strong>선배 제안:</strong> ${match.senior_location?.address || '없음'}<br/>
+            📍 <strong>후배 제안:</strong> ${match.junior_location?.address || '없음'}
+          </div>
+        </div>
+        <p style="font-size:0.82rem;color:var(--text-muted);margin-top:12px">에브리타임 등에서 만나요! 👋</p>
       </div>
     </div>
   `;

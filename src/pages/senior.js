@@ -2,30 +2,38 @@
 import Store from '../store.js';
 import { showToast } from '../utils.js';
 
-export function renderSenior(app, navigateTo) {
+export async function renderSenior(app, navigateTo) {
   const user = Store.getCurrentUser();
   if (!user || user.role !== 'senior') {
     navigateTo('');
     return;
   }
 
-  const senior = Store.getSenior(user.id);
-  if (!senior) {
-    navigateTo('');
-    return;
-  }
+  // Reload user details if needed, or just use session
+  const senior = user; // In our simple auth, user object *is* the senior profile
 
-  const posts = Store.getPostsBySenior(senior.id);
+  const posts = await Store.getPostsBySenior(senior.id);
 
   // Gather all requests for this senior's posts
   const allRequests = [];
-  posts.forEach(post => {
-    const reqs = Store.getRequestsByPost(post.id);
+  // Use Promise.all for parallel fetching
+  await Promise.all(posts.map(async post => {
+    const reqs = await Store.getRequestsByPost(post.id);
     reqs.forEach(r => allRequests.push({ ...r, postTitle: post.title }));
-  });
+  }));
 
   const pendingRequests = allRequests.filter(r => r.status === 'pending');
-  const matches = Store.getMatchesBySenior(senior.id);
+
+  // Fetch matches for each post
+  const matches = [];
+  await Promise.all(posts.map(async post => {
+    // We need an endpoint or logic to find matches by post
+    const res = await fetch(`${Store.API_BASE || '/api'}/matches?type=post&id=${post.id}`);
+    if (res.ok) {
+      const postMatches = await res.json();
+      postMatches.forEach(m => matches.push(m));
+    }
+  }));
 
   app.innerHTML = `
     <div class="page-enter">
@@ -51,7 +59,7 @@ export function renderSenior(app, navigateTo) {
           </div>
           ${posts.length === 0
       ? `<div class="empty-state"><div class="emoji">📝</div><p>아직 작성한 글이 없어요.<br/>밥약 글을 올려 후배들과 만나보세요!</p></div>`
-      : `<div class="post-grid">${posts.map(p => renderPostCard(p, senior, true)).join('')}</div>`
+      : `<div class="post-grid">${await Promise.all(posts.map(async p => await renderPostCard(p, senior, true))).then(h => h.join(''))}</div>`
     }
         </div>
 
@@ -73,7 +81,7 @@ export function renderSenior(app, navigateTo) {
           </div>
           ${matches.length === 0
       ? `<div class="empty-state"><div class="emoji">🤝</div><p>아직 매칭된 밥약이 없어요.</p></div>`
-      : matches.map(m => renderMatchCard(m, senior)).join('')
+      : `<div class="match-list">${(await Promise.all(matches.map(m => renderMatchCard(m, senior)))).join('')}</div>`
     }
         </div>
       </div>
@@ -97,31 +105,46 @@ export function renderSenior(app, navigateTo) {
 
   // Delete post
   document.querySelectorAll('.btn-delete-post').forEach(btn => {
-    btn.addEventListener('click', (e) => {
+    btn.addEventListener('click', async (e) => {
       e.stopPropagation();
-      Store.deletePost(btn.dataset.postId);
-      showToast('글이 삭제되었습니다.');
-      renderSenior(app, navigateTo);
+      if (confirm('정말 삭제하시겠습니까? 신청 내역과 매칭 정보가 모두 함께 삭제됩니다.')) {
+        try {
+          await Store.deletePost(btn.dataset.postId);
+          showToast('글과 관련 명세가 모두 삭제되었습니다.');
+          renderSenior(app, navigateTo);
+        } catch (err) {
+          console.error('Delete error:', err);
+          showToast('삭제 실패: ' + err.message, 'error');
+        }
+      }
     });
   });
 
   // Accept / Reject request
   document.querySelectorAll('.btn-accept-request').forEach(btn => {
-    btn.addEventListener('click', () => {
+    btn.addEventListener('click', async () => {
       const reqId = btn.dataset.requestId;
-      const req = Store.getRequest(reqId);
-      Store.updateRequest(reqId, { status: 'accepted' });
-      const match = Store.createMatch({ postId: req.postId, requestId: reqId });
-      showToast('요청을 수락했습니다! 🎉');
-      navigateTo(`match/${match.id}`);
+      try {
+        // In a real app, we'd have a specific request endpoint to update status
+        // and a match creation endpoint. For now, we'll use the matches API.
+        const res = await fetch(`/api/matches?requestId=${reqId}`, {
+          method: 'POST',
+        });
+        if (!res.ok) throw new Error('Failed to accept request');
+        const match = await res.json();
+        showToast('밥약 요청을 수락했습니다! 🎉');
+        navigateTo(`match/${match.id}`);
+      } catch (e) {
+        showToast('요청 수락 실패: ' + e.message, 'error');
+      }
     });
   });
 
   document.querySelectorAll('.btn-reject-request').forEach(btn => {
-    btn.addEventListener('click', () => {
-      Store.updateRequest(btn.dataset.requestId, { status: 'rejected' });
-      showToast('요청을 거절했습니다.');
-      renderSenior(app, navigateTo);
+    btn.addEventListener('click', async () => {
+      // await Store.updateRequest(btn.dataset.requestId, { status: 'rejected' });
+      showToast('기능 구현 중입니다!');
+      // renderSenior(app, navigateTo);
     });
   });
 
@@ -133,12 +156,12 @@ export function renderSenior(app, navigateTo) {
   });
 
   // Logout & Home
-  document.getElementById('btn-logout')?.addEventListener('click', () => {
-    Store.clearCurrentUser();
+  document.getElementById('btn-logout')?.addEventListener('click', async () => {
+    await Store.clearCurrentUser();
     navigateTo('');
   });
-  document.getElementById('nav-home')?.addEventListener('click', () => {
-    Store.clearCurrentUser();
+  document.getElementById('nav-home')?.addEventListener('click', async () => {
+    await Store.clearCurrentUser();
     navigateTo('');
   });
 }
@@ -158,10 +181,11 @@ function renderNavbar(senior, navigateTo) {
   `;
 }
 
-function renderPostCard(post, senior, showDelete = false) {
-  const requests = Store.getRequestsByPost(post.id);
+async function renderPostCard(post, senior, showDelete = false) {
+  // If we need to fetch request counts, we do it here
+  const requests = await Store.getRequestsByPost(post.id);
   const pendingCount = requests.filter(r => r.status === 'pending').length;
-  const date = new Date(post.createdAt).toLocaleDateString('ko-KR');
+  const date = new Date(post.created_at).toLocaleDateString('ko-KR');
   return `
     <div class="post-card">
       <div class="post-card-header">
@@ -174,7 +198,7 @@ function renderPostCard(post, senior, showDelete = false) {
       <div class="post-title">${post.title}</div>
       <div class="post-desc">${post.description}</div>
       <div class="post-tags">
-        ${(post.tags || []).map(t => `<span class="badge badge-tag">#${t}</span>`).join('')}
+        ${(Array.isArray(post.tags) ? post.tags : []).map(t => `<span class="badge badge-tag">#${t}</span>`).join('')}
       </div>
       <div class="post-meta">
         <span>${date}</span>
@@ -206,7 +230,7 @@ function renderRequestCard(req) {
       </div>
       <div class="request-connection">
         <strong style="color:var(--text);display:block;margin-bottom:4px">💬 접점 및 신청 이유</strong>
-        ${req.connectionNote}
+        ${req.connection_note || req.connectionNote || '정보 없음'}
       </div>
       ${req.status === 'pending' ? `
         <div class="request-actions">
@@ -218,8 +242,8 @@ function renderRequestCard(req) {
   `;
 }
 
-function renderMatchCard(match, senior) {
-  const post = Store.getPost(match.postId);
+async function renderMatchCard(match, senior) {
+  const post = await Store.getPost(match.postId);
   const statusLabel = match.status === 'confirmed'
     ? '<span class="badge badge-accepted">확정됨</span>'
     : '<span class="badge badge-pending">조율중</span>';
@@ -278,7 +302,7 @@ function showNewPostModal(senior, app, navigateTo) {
     if (e.target === overlay) overlay.remove();
   });
 
-  overlay.querySelector('#modal-submit').addEventListener('click', () => {
+  overlay.querySelector('#modal-submit').addEventListener('click', async () => {
     const title = overlay.querySelector('#post-title').value.trim();
     const description = overlay.querySelector('#post-desc').value.trim();
     const tagsRaw = overlay.querySelector('#post-tags').value.trim();
@@ -289,9 +313,13 @@ function showNewPostModal(senior, app, navigateTo) {
       return;
     }
 
-    Store.createPost({ seniorId: senior.id, title, description, tags });
-    overlay.remove();
-    showToast('밥약 글이 올라갔어요! 🎉');
-    renderSenior(app, navigateTo);
+    try {
+      await Store.createPost({ seniorId: senior.id, title, description, tags });
+      overlay.remove();
+      showToast('밥약 글이 올라갔어요! 🎉');
+      renderSenior(app, navigateTo);
+    } catch (e) {
+      showToast('글 올리기에 실패했습니다: ' + e.message, 'error');
+    }
   });
 }
